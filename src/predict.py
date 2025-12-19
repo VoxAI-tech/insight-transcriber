@@ -5,6 +5,7 @@ repository, with some modifications to make it work with the RP platform.
 """
 
 import gc
+import os
 import threading
 from concurrent.futures import (
     ThreadPoolExecutor,
@@ -27,6 +28,13 @@ AVAILABLE_MODELS = {
     "large-v3",
     "turbo",
 }
+
+# Custom models from environment variable (comma-separated HuggingFace model IDs)
+CUSTOM_MODELS = os.environ.get("WHISPER_CUSTOM_MODELS", "")
+for model in CUSTOM_MODELS.split(","):
+    model = model.strip()
+    if model:
+        AVAILABLE_MODELS.add(model)
 
 
 class Predictor:
@@ -140,7 +148,7 @@ class Predictor:
                 beam_size=beam_size,
                 best_of=best_of,
                 patience=patience,
-                length_penalty=length_penalty,
+                length_penalty=length_penalty if length_penalty is not None else 1.0,
                 temperature=temperature,
                 compression_ratio_threshold=compression_ratio_threshold,
                 log_prob_threshold=logprob_threshold,
