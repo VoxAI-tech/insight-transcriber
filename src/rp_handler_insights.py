@@ -25,6 +25,7 @@ RAW_CHANNELS = 1
 from rp_schema_insights import INPUT_VALIDATIONS
 from predict import Predictor
 from echo_removal import remove_echo_from_transcription
+from audio_echo_cancel import process_echo_cancellation
 
 MODEL = Predictor()
 MODEL.setup()
@@ -148,8 +149,11 @@ def run_dual_channel_job(job_input: dict[str, Any]) -> dict[str, Any]:
     }
 
     temp_files: list[str] = []
+    spk_path: str | None = None
+    mic_path: str | None = None
 
     try:
+        # Download/prepare both audio files first
         if has_spk:
             if job_input.get("source_spk_s3_path"):
                 spk_path = download_from_s3(job_input["source_spk_s3_path"])
@@ -158,6 +162,33 @@ def run_dual_channel_job(job_input: dict[str, Any]) -> dict[str, Any]:
                 spk_path = base64_to_tempfile(job_input["spk_audio_base64"])
             temp_files.append(spk_path)
 
+        if has_mic:
+            if job_input.get("source_mic_s3_path"):
+                mic_path = download_from_s3(job_input["source_mic_s3_path"])
+                results["source_mic_s3_path"] = job_input["source_mic_s3_path"]
+            else:
+                mic_path = base64_to_tempfile(job_input["mic_audio_base64"])
+            temp_files.append(mic_path)
+
+        # Apply audio-level echo cancellation if enabled
+        echo_method = job_input.get("echo_method", "audio")
+        if (
+            job_input.get("remove_echo", True)
+            and echo_method == "audio"
+            and spk_path
+            and mic_path
+        ):
+            try:
+                mic_path_clean = process_echo_cancellation(spk_path, mic_path)
+                temp_files.append(mic_path_clean)
+                mic_path = mic_path_clean
+                results["echo_cancelled"] = True
+            except Exception as e:
+                results["echo_cancel_error"] = str(e)
+                results["echo_cancelled"] = False
+
+        # Transcribe SPK
+        if spk_path:
             results["spk_transcription"] = MODEL.predict(
                 audio=spk_path,
                 model_name=job_input["model"],
@@ -181,13 +212,8 @@ def run_dual_channel_job(job_input: dict[str, Any]) -> dict[str, Any]:
                 word_timestamps=job_input["word_timestamps"],
             )
 
-        if has_mic:
-            if job_input.get("source_mic_s3_path"):
-                mic_path = download_from_s3(job_input["source_mic_s3_path"])
-                results["source_mic_s3_path"] = job_input["source_mic_s3_path"]
-            else:
-                mic_path = base64_to_tempfile(job_input["mic_audio_base64"])
-            temp_files.append(mic_path)
+        # Transcribe MIC (with echo cancelled if audio method used)
+        if mic_path:
 
             results["mic_transcription"] = MODEL.predict(
                 audio=mic_path,
@@ -220,9 +246,10 @@ def run_dual_channel_job(job_input: dict[str, Any]) -> dict[str, Any]:
                 pass
         rp_cleanup.clean(["input_objects"])
 
-    # Apply echo removal if enabled and both channels transcribed
+    # Apply text-based echo removal if enabled and using "text" method
     if (
         job_input.get("remove_echo", True)
+        and job_input.get("echo_method", "audio") == "text"
         and results.get("spk_transcription")
         and results.get("mic_transcription")
     ):

@@ -155,6 +155,11 @@ INPUT_VALIDATIONS = {
         "required": False,
         "default": True,
     },
+    "echo_method": {
+        "type": str,
+        "required": False,
+        "default": "audio",  # "audio" (better) or "text" (n-gram)
+    },
     "echo_word_threshold": {
         "type": float,
         "required": False,
